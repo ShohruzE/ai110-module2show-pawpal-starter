@@ -1,6 +1,6 @@
 import streamlit as st
 from pawpal_system import User, Pet, Task, Schedule
-from datetime import date
+from datetime import date, datetime, time as dt_time
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 
@@ -96,27 +96,47 @@ if st.session_state.owner.pets:
     with t_col3:
         priority_label = st.selectbox("Priority", ["low", "medium", "high"], index=1)
 
+    # Optional desired date/time for the task (helps the scheduler)
+    due_col1, due_col2 = st.columns([1, 1])
+    with due_col1:
+        due_date = st.date_input(
+            "Desired date", value=date.today(), key="task_due_date"
+        )
+    with due_col2:
+        due_time = st.time_input(
+            "Desired time", value=datetime.now().time(), key="task_due_time"
+        )
+
     priority_map = {"low": 1, "medium": 2, "high": 3}
     if st.button("Add task to pet"):
+        # compose due_time from inputs
+        desired_dt = datetime.combine(due_date, due_time)
         t = Task(
             title=task_title,
             duration_minutes=int(duration),
             priority=priority_map[priority_label],
+            due_time=desired_dt,
         )
         selected_pet.add_task(t)
 
     # Display tasks per pet
     st.write(f"Tasks for {selected_pet.name}:")
     if selected_pet.tasks:
+        # show tasks sorted by desired time (tasks without times are shown last)
+        sorted_tasks = Task.sort_by_time(list(selected_pet.tasks))
         st.table(
             [
                 {
                     "id": t.id,
                     "title": t.title,
-                    "duration": t.duration_minutes,
+                    "due_time": t.due_time.strftime("%Y-%m-%d %H:%M")
+                    if t.due_time
+                    else "(none)",
+                    "duration_min": t.duration_minutes,
                     "priority": t.priority,
+                    "completed": t.completed,
                 }
-                for t in selected_pet.tasks
+                for t in sorted_tasks
             ]
         )
     else:
@@ -135,14 +155,42 @@ if st.button("Generate schedule"):
     tasks_today = owner.get_tasks_for_date(date.today())
     sched = Schedule(owner.id, date.today())
     sched.generate(tasks_today)
+    # Build lookups for nicer display and warnings
+    task_lookup = {t.id: t for pet in owner.pets for t in pet.tasks}
+    pet_lookup = {p.id: p for p in owner.pets}
+
+    # Detect slot overlaps and desired-time conflicts
+    slot_warnings = sched.detect_conflicts(
+        task_lookup=task_lookup, pet_lookup=pet_lookup
+    )
+    desired_warnings = sched.detect_desired_time_conflicts(
+        tasks_today, task_lookup=task_lookup, pet_lookup=pet_lookup
+    )
+
+    all_warnings = list(slot_warnings) + list(desired_warnings)
+
+    if all_warnings:
+        st.warning("Schedule generation produced warnings — please review:")
+        for w in all_warnings:
+            st.warning(w)
+    else:
+        st.success("No scheduling conflicts detected.")
+
     if sched.slots:
         st.write("Generated schedule:")
         st.table(
             [
                 {
                     "task_id": s.task_id,
-                    "start": s.start_time.time(),
-                    "end": s.end_time.time(),
+                    "task_title": task_lookup[s.task_id].title
+                    if s.task_id in task_lookup
+                    else s.task_id,
+                    "pet": pet_lookup[task_lookup[s.task_id].pet_id].name
+                    if s.task_id in task_lookup
+                    and task_lookup[s.task_id].pet_id in pet_lookup
+                    else "-",
+                    "start": s.start_time.strftime("%Y-%m-%d %H:%M"),
+                    "end": s.end_time.strftime("%Y-%m-%d %H:%M"),
                 }
                 for s in sched.slots
             ]
