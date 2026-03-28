@@ -25,6 +25,23 @@ The project includes several small but impactful scheduler improvements that mak
 
 All warnings are non-fatal and printed or returned so the UI can surface them without crashing. See `main.py` for a small demo that adds conflicting tasks and prints desired-time and slot warnings.
 
+## Testing PawPal+
+
+To run the test suite execute:
+
+```bash
+python -m pytest
+```
+
+What the tests cover:
+- Sorting correctness: verifies `Task.sort_by_time()` returns tasks in chronological order (tasks without a due time sort last).
+- Recurrence logic: confirms marking a `daily` recurring task complete creates a new task scheduled for the following day and attaches it to the same `Pet`.
+- Conflict detection: ensures `Schedule.detect_desired_time_conflicts()` flags duplicate desired start times and `Schedule.detect_conflicts()` reports overlapping schedule slots.
+
+Confidence Level: ★★★★☆ (4/5)
+
+Reasoning: tests for the critical scheduling behaviors pass locally (sorting, recurrence advancement, desired-time and slot conflict detection). Edge cases like DST handling, leap-day yearly recurrences, and complex monthly rules are not yet exhaustively covered, so the system is mostly reliable for common workflows but may need more tests for rare calendar edge cases.
+
 ## What you will build
 
 Your final app should:
