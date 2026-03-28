@@ -12,6 +12,19 @@ A busy pet owner needs help staying consistent with pet care. They want an assis
 
 Your job is to design the system first (UML), then implement the logic in Python, then connect it to the Streamlit UI.
 
+## Smarter Scheduling
+
+The project includes several small but impactful scheduler improvements that make plans more useful and robust:
+
+- **Priority-first greedy scheduling:** tasks are ordered by `priority` (high → low) then `due_time`, and packed from a configurable day start. Overlaps are resolved by shifting lower-priority tasks later so urgent items stay scheduled.
+- **Desired-time conflict detection:** the system warns when multiple tasks share the exact same requested `due_time` (so you can fix accidental collisions before the scheduler shifts tasks).
+- **Slot-overlap detection and non-fatal warnings:** after building a schedule the `Schedule` object can detect overlapping slots and return human-friendly warnings (includes task title and pet name when available).
+- **Recurring-task auto-creation:** marking a `daily` or `weekly` task complete automatically creates the next occurrence (preserves time-of-day) and attaches it to the same pet.
+- **Sorting & filtering helpers:** `Task.sort_by_time()` and `User.filter_tasks(completed=..., pet_name=...)` make it easy to inspect and manipulate task lists for UI/debugging.
+- **Simpler, clearer generator logic:** the scheduler refactor precomputes durations and preferred starts and uses a single `last_end` pointer — this improves readability and slightly reduces overhead.
+
+All warnings are non-fatal and printed or returned so the UI can surface them without crashing. See `main.py` for a small demo that adds conflicting tasks and prints desired-time and slot warnings.
+
 ## What you will build
 
 Your final app should:

@@ -44,16 +44,63 @@ class Task:
         )
 
     def mark_complete(
-        self, when: Optional[datetime] = None, by: Optional[str] = None
-    ) -> None:
+        self,
+        when: Optional[datetime] = None,
+        by: Optional[str] = None,
+        owner_pets: Optional[List["Pet"]] = None,
+    ) -> Optional["Task"]:
         """Mark the task complete and record timestamp and actor."""
         self.completed = True
         self.completed_at = when or datetime.now()
         self.completed_by = by
 
+        # If this is a recurring task (daily/weekly), create the next occurrence.
+        if self.frequency in {"daily", "weekly"}:
+            # Calculate next due time using timedelta; preserve time-of-day when possible.
+            base_dt = when or datetime.now()
+            if self.frequency == "daily":
+                delta = timedelta(days=1)
+            else:
+                delta = timedelta(weeks=1)
+
+            if self.due_time:
+                # Preserve original time-of-day
+                next_date = (base_dt + delta).date()
+                next_due = datetime.combine(next_date, self.due_time.time())
+            else:
+                next_due = base_dt + delta
+
+            new_task = Task(
+                pet_id=self.pet_id,
+                title=self.title,
+                due_time=next_due,
+                duration_minutes=self.duration_minutes,
+                priority=self.priority,
+                frequency=self.frequency,
+            )
+
+            # If owner_pets provided, attempt to attach the new task to the matching Pet
+            if owner_pets:
+                for pet in owner_pets:
+                    if pet.id == self.pet_id:
+                        pet.add_task(new_task)
+                        break
+
+            return new_task
+
+        return None
+
     def reschedule(self, new_time: datetime) -> None:
         """Set a new due time for the task."""
         self.due_time = new_time
+
+    @staticmethod
+    def sort_by_time(tasks: List["Task"]) -> List["Task"]:
+        """Return a new list of tasks sorted by `due_time` (earliest first).
+
+        Tasks with no `due_time` sort to the end.
+        """
+        return sorted(tasks, key=lambda t: t.due_time or datetime.max)
 
 
 @dataclass
@@ -113,6 +160,7 @@ class Schedule:
         self.date = date_for
         self.slots: List[ScheduleSlot] = []
         self.generated_at: Optional[datetime] = None
+        self.warnings: List[str] = []
 
     def generate(self, tasks_pool: List[Task], day_start: time = time(8, 0)) -> None:
         """Greedy pack tasks into non-overlapping slots.
@@ -122,6 +170,8 @@ class Schedule:
         - Start at `day_start` and avoid overlaps by shifting later.
         """
         """Pack tasks into non-overlapping schedule slots for this date."""
+        # clear previous warnings and build today's tasks
+        self.warnings = []
         tasks = [t for t in tasks_pool if t.due_time and t.due_time.date() == self.date]
         tasks.sort(key=lambda t: (-t.priority, t.due_time or datetime.min))
 
@@ -147,6 +197,85 @@ class Schedule:
             current_dt = end
 
         self.generated_at = datetime.now()
+
+    def detect_conflicts(
+        self, task_lookup: Optional[dict] = None, pet_lookup: Optional[dict] = None
+    ) -> List[str]:
+        """Detect overlapping schedule slots and return human-friendly warning messages.
+
+        If `task_lookup` and `pet_lookup` are provided they will be used to include
+        task titles and pet names in the warning messages; otherwise task ids are used.
+        """
+        warnings: List[str] = []
+        n = len(self.slots)
+        for i in range(n):
+            a = self.slots[i]
+            for j in range(i + 1, n):
+                b = self.slots[j]
+                if a.overlaps(b):
+
+                    def desc(slot):
+                        if task_lookup and slot.task_id in task_lookup:
+                            t = task_lookup[slot.task_id]
+                            pet_name = (
+                                pet_lookup[t.pet_id].name
+                                if pet_lookup and t.pet_id in pet_lookup
+                                else t.pet_id
+                            )
+                            return f"'{t.title}' (pet: {pet_name})"
+                        return slot.task_id
+
+                    msg = (
+                        f"Conflict: {desc(a)} [{a.start_time.strftime('%H:%M')} - {a.end_time.strftime('%H:%M')}] "
+                        f"overlaps {desc(b)} [{b.start_time.strftime('%H:%M')} - {b.end_time.strftime('%H:%M')}]"
+                    )
+                    warnings.append(msg)
+
+        self.warnings = warnings
+        return warnings
+
+    def detect_desired_time_conflicts(
+        self,
+        tasks_pool: List[Task],
+        task_lookup: Optional[dict] = None,
+        pet_lookup: Optional[dict] = None,
+    ) -> List[str]:
+        """Detect tasks that share the exact same desired `due_time` on this schedule's date.
+
+        This method warns when two or more tasks are scheduled to start at the exact
+        same datetime (useful because the greedy scheduler will shift tasks and hide
+        that original conflict). Returns a list of warning messages.
+        """
+        groups = {}
+        for t in tasks_pool:
+            if not t.due_time or t.due_time.date() != self.date:
+                continue
+            key = t.due_time
+            groups.setdefault(key, []).append(t)
+
+        warnings: List[str] = []
+        for dt, tasks in groups.items():
+            if len(tasks) > 1:
+                names = []
+                for t in tasks:
+                    if task_lookup and t.id in task_lookup:
+                        tt = task_lookup[t.id]
+                        pet_name = (
+                            pet_lookup[tt.pet_id].name
+                            if pet_lookup and tt.pet_id in pet_lookup
+                            else tt.pet_id
+                        )
+                        names.append(f"'{tt.title}' (pet: {pet_name})")
+                    else:
+                        names.append(f"{t.title} (id:{t.id})")
+                timestr = dt.strftime("%H:%M")
+                warnings.append(
+                    f"Desired-time conflict at {timestr}: multiple tasks start then: {', '.join(names)}"
+                )
+
+        # do not overwrite slot-based warnings — append for caller convenience
+        self.warnings = list(self.warnings) + warnings
+        return warnings
 
 
 class Reminder:
@@ -195,6 +324,23 @@ class User:
                 if t.due_time and t.due_time.date() == target_date:
                     tasks.append(t)
         return tasks
+
+    def filter_tasks(
+        self, completed: Optional[bool] = None, pet_name: Optional[str] = None
+    ) -> List[Task]:
+        """Return tasks optionally filtered by completion status and/or pet name.
+
+        - `completed` if set will filter tasks by their `completed` flag.
+        - `pet_name` if set will match pet name case-insensitively.
+        """
+        results: List[Task] = []
+        for pet in self.pets:
+            if pet_name and pet.name.lower() != pet_name.lower():
+                continue
+            for t in pet.tasks:
+                if completed is None or t.completed == completed:
+                    results.append(t)
+        return results
 
 
 # Small usage example (kept minimal for the project)
