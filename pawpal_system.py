@@ -21,15 +21,21 @@ class Task:
     due_time: Optional[datetime] = None
     duration_minutes: Optional[int] = None
     priority: int = 2  # 1=low,2=medium,3=high
+    frequency: str = "once"  # once|daily|weekly|monthly
     completed: bool = False
     completed_at: Optional[datetime] = None
     completed_by: Optional[str] = None
 
     def __post_init__(self) -> None:
+        """Validate priority and frequency after initialization."""
         if not (1 <= self.priority <= 3):
             raise ValueError("priority must be 1..3")
+        valid_frequencies = {"once", "daily", "weekly", "monthly"}
+        if self.frequency not in valid_frequencies:
+            raise ValueError(f"frequency must be one of {valid_frequencies}")
 
     def is_due(self, when: Optional[datetime] = None) -> bool:
+        """Return True if the task is due (time passed) and not completed."""
         when = when or datetime.now()
         return (
             (self.due_time is not None)
@@ -40,11 +46,13 @@ class Task:
     def mark_complete(
         self, when: Optional[datetime] = None, by: Optional[str] = None
     ) -> None:
+        """Mark the task complete and record timestamp and actor."""
         self.completed = True
         self.completed_at = when or datetime.now()
         self.completed_by = by
 
     def reschedule(self, new_time: datetime) -> None:
+        """Set a new due time for the task."""
         self.due_time = new_time
 
 
@@ -58,17 +66,21 @@ class Pet:
     tasks: List[Task] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        """Validate that the pet has a non-empty name."""
         if not self.name:
             raise ValueError("Pet.name must not be empty")
 
     def add_task(self, task: Task) -> None:
+        """Attach a Task to this pet and set the task's pet_id."""
         task.pet_id = self.id
         self.tasks.append(task)
 
     def remove_task(self, task_id: str) -> None:
+        """Remove a Task from this pet by its id."""
         self.tasks = [t for t in self.tasks if t.id != task_id]
 
     def age_years(self) -> Optional[int]:
+        """Return pet age in whole years, or None if birth date unknown."""
         if not self.birth_date:
             return None
         today = date.today()
@@ -89,6 +101,7 @@ class ScheduleSlot:
     status: str = "planned"  # planned|complete|skipped
 
     def overlaps(self, other: "ScheduleSlot") -> bool:
+        """Return True if this slot overlaps the other slot."""
         return not (
             self.end_time <= other.start_time or self.start_time >= other.end_time
         )
@@ -108,6 +121,7 @@ class Schedule:
         - Tasks are ordered by priority (desc), then due_time.
         - Start at `day_start` and avoid overlaps by shifting later.
         """
+        """Pack tasks into non-overlapping schedule slots for this date."""
         tasks = [t for t in tasks_pool if t.due_time and t.due_time.date() == self.date]
         tasks.sort(key=lambda t: (-t.priority, t.due_time or datetime.min))
 
@@ -153,6 +167,7 @@ class Reminder:
         self.trigger = trigger
 
     def snooze(self, minutes: int = 10) -> None:
+        """Postpone the reminder by the given number of minutes."""
         self.trigger = self.trigger + timedelta(minutes=minutes)
 
 
@@ -164,13 +179,16 @@ class User:
         self.pets: List[Pet] = []
 
     def add_pet(self, pet: Pet) -> None:
+        """Attach a pet to this user and set ownership."""
         pet.owner_id = self.id
         self.pets.append(pet)
 
     def remove_pet(self, pet_id: str) -> None:
+        """Remove a pet from the user by id."""
         self.pets = [p for p in self.pets if p.id != pet_id]
 
     def get_tasks_for_date(self, target_date: date) -> List[Task]:
+        """Collect tasks across all pets that are due on target_date."""
         tasks: List[Task] = []
         for pet in self.pets:
             for t in pet.tasks:
